@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { models, user } from '$lib/stores';
-	import { createEventDispatcher, onMount, getContext } from 'svelte';
+	import { createEventDispatcher, onMount, getContext, tick } from 'svelte';
 	const dispatch = createEventDispatcher();
 
 	import {
@@ -23,10 +23,14 @@
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import { getModels as _getModels } from '$lib/apis';
 
 	const i18n = getContext('i18n');
 
-	export let getModels: Function;
+	const getModels = async () => {
+		const models = await _getModels(localStorage.token);
+		return models;
+	};
 
 	// External
 	let OLLAMA_BASE_URLS = [''];
@@ -40,6 +44,8 @@
 	let ENABLE_OLLAMA_API = null;
 
 	const verifyOpenAIHandler = async (idx) => {
+		OPENAI_API_BASE_URLS = OPENAI_API_BASE_URLS.map((url) => url.replace(/\/$/, ''));
+
 		OPENAI_API_BASE_URLS = await updateOpenAIUrls(localStorage.token, OPENAI_API_BASE_URLS);
 		OPENAI_API_KEYS = await updateOpenAIKeys(localStorage.token, OPENAI_API_KEYS);
 
@@ -59,6 +65,10 @@
 	};
 
 	const verifyOllamaHandler = async (idx) => {
+		OLLAMA_BASE_URLS = OLLAMA_BASE_URLS.filter((url) => url !== '').map((url) =>
+			url.replace(/\/$/, '')
+		);
+
 		OLLAMA_BASE_URLS = await updateOllamaUrls(localStorage.token, OLLAMA_BASE_URLS);
 
 		const res = await getOllamaVersion(localStorage.token, idx).catch((error) => {
@@ -74,23 +84,53 @@
 	};
 
 	const updateOpenAIHandler = async () => {
+		OPENAI_API_BASE_URLS = OPENAI_API_BASE_URLS.map((url) => url.replace(/\/$/, ''));
+
+		// Check if API KEYS length is same than API URLS length
+		if (OPENAI_API_KEYS.length !== OPENAI_API_BASE_URLS.length) {
+			// if there are more keys than urls, remove the extra keys
+			if (OPENAI_API_KEYS.length > OPENAI_API_BASE_URLS.length) {
+				OPENAI_API_KEYS = OPENAI_API_KEYS.slice(0, OPENAI_API_BASE_URLS.length);
+			}
+
+			// if there are more urls than keys, add empty keys
+			if (OPENAI_API_KEYS.length < OPENAI_API_BASE_URLS.length) {
+				const diff = OPENAI_API_BASE_URLS.length - OPENAI_API_KEYS.length;
+				for (let i = 0; i < diff; i++) {
+					OPENAI_API_KEYS.push('');
+				}
+			}
+		}
+
 		OPENAI_API_BASE_URLS = await updateOpenAIUrls(localStorage.token, OPENAI_API_BASE_URLS);
 		OPENAI_API_KEYS = await updateOpenAIKeys(localStorage.token, OPENAI_API_KEYS);
-
 		await models.set(await getModels());
 	};
 
 	const updateOllamaUrlsHandler = async () => {
-		OLLAMA_BASE_URLS = await updateOllamaUrls(localStorage.token, OLLAMA_BASE_URLS);
+		OLLAMA_BASE_URLS = OLLAMA_BASE_URLS.filter((url) => url !== '').map((url) =>
+			url.replace(/\/$/, '')
+		);
 
-		const ollamaVersion = await getOllamaVersion(localStorage.token).catch((error) => {
-			toast.error(error);
-			return null;
-		});
+		console.log(OLLAMA_BASE_URLS);
 
-		if (ollamaVersion) {
-			toast.success($i18n.t('Server connection verified'));
-			await models.set(await getModels());
+		if (OLLAMA_BASE_URLS.length === 0) {
+			ENABLE_OLLAMA_API = false;
+			await updateOllamaConfig(localStorage.token, ENABLE_OLLAMA_API);
+
+			toast.info($i18n.t('Ollama API disabled'));
+		} else {
+			OLLAMA_BASE_URLS = await updateOllamaUrls(localStorage.token, OLLAMA_BASE_URLS);
+
+			const ollamaVersion = await getOllamaVersion(localStorage.token).catch((error) => {
+				toast.error(error);
+				return null;
+			});
+
+			if (ollamaVersion) {
+				toast.success($i18n.t('Server connection verified'));
+				await models.set(await getModels());
+			}
 		}
 	};
 
@@ -133,7 +173,7 @@
 		dispatch('save');
 	}}
 >
-	<div class="space-y-3 pr-1.5 overflow-y-scroll h-[24rem] max-h-[25rem]">
+	<div class="space-y-3 overflow-y-scroll scrollbar-hidden h-full">
 		{#if ENABLE_OPENAI_API !== null && ENABLE_OLLAMA_API !== null}
 			<div class=" space-y-3">
 				<div class="mt-2 space-y-2 pr-1.5">
@@ -275,7 +315,7 @@
 				</div>
 			</div>
 
-			<hr class=" dark:border-gray-700" />
+			<hr class=" dark:border-gray-850" />
 
 			<div class="pr-1.5 space-y-2">
 				<div class="flex justify-between items-center text-sm">
@@ -286,6 +326,10 @@
 							bind:state={ENABLE_OLLAMA_API}
 							on:change={async () => {
 								updateOllamaConfig(localStorage.token, ENABLE_OLLAMA_API);
+
+								if (OLLAMA_BASE_URLS.length === 0) {
+									OLLAMA_BASE_URLS = [''];
+								}
 							}}
 						/>
 					</div>

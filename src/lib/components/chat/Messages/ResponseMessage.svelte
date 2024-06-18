@@ -5,6 +5,7 @@
 	import tippy from 'tippy.js';
 	import auto_render from 'katex/dist/contrib/auto-render.mjs';
 	import 'katex/dist/katex.min.css';
+	import mermaid from 'mermaid';
 
 	import { fade } from 'svelte/transition';
 	import { createEventDispatcher } from 'svelte';
@@ -210,82 +211,98 @@
 			speaking = null;
 			speakingIdx = null;
 		} else {
-			speaking = true;
+			if ((message?.content ?? '').trim() !== '') {
+				speaking = true;
 
-			if ($settings?.audio?.TTSEngine === 'openai') {
-				loadingSpeech = true;
+				if ($config.audio.tts.engine === 'openai') {
+					loadingSpeech = true;
 
-				const sentences = extractSentences(message.content).reduce((mergedTexts, currentText) => {
-					const lastIndex = mergedTexts.length - 1;
-					if (lastIndex >= 0) {
-						const previousText = mergedTexts[lastIndex];
-						const wordCount = previousText.split(/\s+/).length;
-						if (wordCount < 2) {
-							mergedTexts[lastIndex] = previousText + ' ' + currentText;
+					const sentences = extractSentences(message.content).reduce((mergedTexts, currentText) => {
+						const lastIndex = mergedTexts.length - 1;
+						if (lastIndex >= 0) {
+							const previousText = mergedTexts[lastIndex];
+							const wordCount = previousText.split(/\s+/).length;
+							if (wordCount < 2) {
+								mergedTexts[lastIndex] = previousText + ' ' + currentText;
+							} else {
+								mergedTexts.push(currentText);
+							}
 						} else {
 							mergedTexts.push(currentText);
 						}
-					} else {
-						mergedTexts.push(currentText);
+						return mergedTexts;
+					}, []);
+
+					console.log(sentences);
+
+					sentencesAudio = sentences.reduce((a, e, i, arr) => {
+						a[i] = null;
+						return a;
+					}, {});
+
+					let lastPlayedAudioPromise = Promise.resolve(); // Initialize a promise that resolves immediately
+
+					for (const [idx, sentence] of sentences.entries()) {
+						const res = await synthesizeOpenAISpeech(
+							localStorage.token,
+							$settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice,
+							sentence
+						).catch((error) => {
+							toast.error(error);
+
+							speaking = null;
+							loadingSpeech = false;
+
+							return null;
+						});
+
+						if (res) {
+							const blob = await res.blob();
+							const blobUrl = URL.createObjectURL(blob);
+							const audio = new Audio(blobUrl);
+							sentencesAudio[idx] = audio;
+							loadingSpeech = false;
+							lastPlayedAudioPromise = lastPlayedAudioPromise.then(() => playAudio(idx));
+						}
 					}
-					return mergedTexts;
-				}, []);
+				} else {
+					let voices = [];
+					const getVoicesLoop = setInterval(async () => {
+						voices = await speechSynthesis.getVoices();
+						if (voices.length > 0) {
+							clearInterval(getVoicesLoop);
 
-				console.log(sentences);
+							const voice =
+								voices
+									?.filter(
+										(v) =>
+											v.voiceURI === ($settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice)
+									)
+									?.at(0) ?? undefined;
 
-				sentencesAudio = sentences.reduce((a, e, i, arr) => {
-					a[i] = null;
-					return a;
-				}, {});
+							console.log(voice);
 
-				let lastPlayedAudioPromise = Promise.resolve(); // Initialize a promise that resolves immediately
+							const speak = new SpeechSynthesisUtterance(message.content);
 
-				for (const [idx, sentence] of sentences.entries()) {
-					const res = await synthesizeOpenAISpeech(
-						localStorage.token,
-						$settings?.audio?.speaker,
-						sentence,
-						$settings?.audio?.model
-					).catch((error) => {
-						toast.error(error);
+							console.log(speak);
 
-						speaking = null;
-						loadingSpeech = false;
+							speak.onend = () => {
+								speaking = null;
+								if ($settings.conversationMode) {
+									document.getElementById('voice-input-button')?.click();
+								}
+							};
 
-						return null;
-					});
+							if (voice) {
+								speak.voice = voice;
+							}
 
-					if (res) {
-						const blob = await res.blob();
-						const blobUrl = URL.createObjectURL(blob);
-						const audio = new Audio(blobUrl);
-						sentencesAudio[idx] = audio;
-						loadingSpeech = false;
-						lastPlayedAudioPromise = lastPlayedAudioPromise.then(() => playAudio(idx));
-					}
+							speechSynthesis.speak(speak);
+						}
+					}, 100);
 				}
 			} else {
-				let voices = [];
-				const getVoicesLoop = setInterval(async () => {
-					voices = await speechSynthesis.getVoices();
-					if (voices.length > 0) {
-						clearInterval(getVoicesLoop);
-
-						const voice =
-							voices?.filter((v) => v.name === $settings?.audio?.speaker)?.at(0) ?? undefined;
-
-						const speak = new SpeechSynthesisUtterance(message.content);
-
-						speak.onend = () => {
-							speaking = null;
-							if ($settings.conversationMode) {
-								document.getElementById('voice-input-button')?.click();
-							}
-						};
-						speak.voice = voice;
-						speechSynthesis.speak(speak);
-					}
-				}, 100);
+				toast.error('No content to speak');
 			}
 		}
 	};
@@ -340,9 +357,24 @@
 		generatingImage = false;
 	};
 
+	$: if (!edit) {
+		(async () => {
+			await tick();
+			renderStyling();
+
+			await mermaid.run({
+				querySelector: '.mermaid'
+			});
+		})();
+	}
+
 	onMount(async () => {
 		await tick();
 		renderStyling();
+
+		await mermaid.run({
+			querySelector: '.mermaid'
+		});
 	});
 </script>
 
@@ -388,26 +420,29 @@
 				class="prose chat-{message.role} w-full max-w-full dark:prose-invert prose-headings:my-0 prose-headings:-mb-4 prose-p:m-0 prose-p:-mb-6 prose-pre:my-0 prose-table:my-0 prose-blockquote:my-0 prose-img:my-0 prose-ul:-my-4 prose-ol:-my-4 prose-li:-my-3 prose-ul:-mb-6 prose-ol:-mb-8 prose-ol:p-0 prose-li:-mb-4 whitespace-pre-line"
 			>
 				<div>
-					{#if message?.status}
+					{#if (message?.statusHistory ?? [...(message?.status ? [message?.status] : [])]).length > 0}
+						{@const status = (
+							message?.statusHistory ?? [...(message?.status ? [message?.status] : [])]
+						).at(-1)}
 						<div class="flex items-center gap-2 pt-1 pb-1">
-							{#if message?.status?.done === false}
+							{#if status.done === false}
 								<div class="">
 									<Spinner className="size-4" />
 								</div>
 							{/if}
 
-							{#if message?.status?.action === 'web_search' && message?.status?.urls}
-								<WebSearchResults urls={message?.status?.urls}>
+							{#if status?.action === 'web_search' && status?.urls}
+								<WebSearchResults {status}>
 									<div class="flex flex-col justify-center -space-y-0.5">
 										<div class="text-base line-clamp-1 text-wrap">
-											{message.status.description}
+											{status?.description}
 										</div>
 									</div>
 								</WebSearchResults>
 							{:else}
 								<div class="flex flex-col justify-center -space-y-0.5">
 									<div class=" text-gray-500 dark:text-gray-500 text-base line-clamp-1 text-wrap">
-										{message.status.description}
+										{status?.description}
 									</div>
 								</div>
 							{/if}
@@ -458,11 +493,15 @@
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
 								{#each tokens as token, tokenIdx}
 									{#if token.type === 'code'}
-										<CodeBlock
-											id={`${message.id}-${tokenIdx}`}
-											lang={token?.lang ?? ''}
-											code={revertSanitizedResponseContent(token?.text ?? '')}
-										/>
+										{#if token.lang === 'mermaid'}
+											<pre class="mermaid">{revertSanitizedResponseContent(token.text)}</pre>
+										{:else}
+											<CodeBlock
+												id={`${message.id}-${tokenIdx}`}
+												lang={token?.lang ?? ''}
+												code={revertSanitizedResponseContent(token?.text ?? '')}
+											/>
+										{/if}
 									{:else}
 										{@html marked.parse(token.raw, {
 											...defaults,
@@ -737,7 +776,7 @@
 										</Tooltip>
 
 										{#if $config?.features.enable_image_generation && !readOnly}
-											<Tooltip content="Generate Image" placement="bottom">
+											<Tooltip content={$i18n.t('Generate Image')} placement="bottom">
 												<button
 													class="{isLastMessage
 														? 'visible'
@@ -837,8 +876,8 @@
 												<button
 													class="{isLastMessage
 														? 'visible'
-														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg {message
-														?.annotation?.rating === 1
+														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg {(message
+														?.annotation?.rating ?? null) === 1
 														? 'bg-gray-100 dark:bg-gray-800'
 														: ''} dark:hover:text-white hover:text-black transition"
 													on:click={() => {
@@ -872,8 +911,8 @@
 												<button
 													class="{isLastMessage
 														? 'visible'
-														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg {message
-														?.annotation?.rating === -1
+														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg {(message
+														?.annotation?.rating ?? null) === -1
 														? 'bg-gray-100 dark:bg-gray-800'
 														: ''} dark:hover:text-white hover:text-black transition"
 													on:click={() => {
@@ -901,67 +940,68 @@
 													>
 												</button>
 											</Tooltip>
-										{/if}
 
-										{#if isLastMessage && !readOnly}
-											<Tooltip content={$i18n.t('Continue Response')} placement="bottom">
-												<button
-													type="button"
-													class="{isLastMessage
-														? 'visible'
-														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition regenerate-response-button"
-													on:click={() => {
-														continueGeneration();
-													}}
-												>
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														fill="none"
-														viewBox="0 0 24 24"
-														stroke-width="2.3"
-														stroke="currentColor"
-														class="w-4 h-4"
+											{#if isLastMessage}
+												<Tooltip content={$i18n.t('Continue Response')} placement="bottom">
+													<button
+														type="button"
+														class="{isLastMessage
+															? 'visible'
+															: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition regenerate-response-button"
+														on:click={() => {
+															continueGeneration();
+														}}
 													>
-														<path
-															stroke-linecap="round"
-															stroke-linejoin="round"
-															d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-														/>
-														<path
-															stroke-linecap="round"
-															stroke-linejoin="round"
-															d="M15.91 11.672a.375.375 0 0 1 0 .656l-5.603 3.113a.375.375 0 0 1-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112Z"
-														/>
-													</svg>
-												</button>
-											</Tooltip>
+														<svg
+															xmlns="http://www.w3.org/2000/svg"
+															fill="none"
+															viewBox="0 0 24 24"
+															stroke-width="2.3"
+															stroke="currentColor"
+															class="w-4 h-4"
+														>
+															<path
+																stroke-linecap="round"
+																stroke-linejoin="round"
+																d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+															/>
+															<path
+																stroke-linecap="round"
+																stroke-linejoin="round"
+																d="M15.91 11.672a.375.375 0 0 1 0 .656l-5.603 3.113a.375.375 0 0 1-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112Z"
+															/>
+														</svg>
+													</button>
+												</Tooltip>
 
-											<Tooltip content={$i18n.t('Regenerate')} placement="bottom">
-												<button
-													type="button"
-													class="{isLastMessage
-														? 'visible'
-														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition regenerate-response-button"
-													on:click={() => {
-														regenerateResponse(message);
-													}}
-												>
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														fill="none"
-														viewBox="0 0 24 24"
-														stroke-width="2.3"
-														stroke="currentColor"
-														class="w-4 h-4"
+												<Tooltip content={$i18n.t('Regenerate')} placement="bottom">
+													<button
+														type="button"
+														class="{isLastMessage
+															? 'visible'
+															: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition regenerate-response-button"
+														on:click={() => {
+															showRateComment = false;
+															regenerateResponse(message);
+														}}
 													>
-														<path
-															stroke-linecap="round"
-															stroke-linejoin="round"
-															d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
-														/>
-													</svg>
-												</button>
-											</Tooltip>
+														<svg
+															xmlns="http://www.w3.org/2000/svg"
+															fill="none"
+															viewBox="0 0 24 24"
+															stroke-width="2.3"
+															stroke="currentColor"
+															class="w-4 h-4"
+														>
+															<path
+																stroke-linecap="round"
+																stroke-linejoin="round"
+																d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+															/>
+														</svg>
+													</button>
+												</Tooltip>
+											{/if}
 										{/if}
 									{/if}
 								</div>
