@@ -1,5 +1,6 @@
 <script>
-	import { onMount, getContext } from 'svelte';
+	import { onMount, getContext, createEventDispatcher } from 'svelte';
+	const dispatch = createEventDispatcher();
 	const i18n = getContext('i18n');
 
 	import Switch from './Switch.svelte';
@@ -8,7 +9,7 @@
 	export let valves = {};
 </script>
 
-{#if valvesSpec}
+{#if valvesSpec && Object.keys(valvesSpec?.properties ?? {}).length}
 	{#each Object.keys(valvesSpec.properties) as property, idx}
 		<div class=" py-0.5 w-full justify-between">
 			<div class="flex w-full justify-between">
@@ -21,13 +22,15 @@
 				</div>
 
 				<button
-					class="p-1 px-3 text-xs flex rounded transition"
+					class="p-1 px-3 text-xs flex rounded-sm transition"
 					type="button"
 					on:click={() => {
 						valves[property] =
 							(valves[property] ?? null) === null
-								? valvesSpec.properties[property]?.default ?? ''
+								? (valvesSpec.properties[property]?.default ?? '')
 								: null;
+
+						dispatch('change');
 					}}
 				>
 					{#if (valves[property] ?? null) === null}
@@ -50,8 +53,11 @@
 					<div class=" flex-1">
 						{#if valvesSpec.properties[property]?.enum ?? null}
 							<select
-								class="w-full rounded-lg py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-850 outline-none border border-gray-100 dark:border-gray-800"
+								class="w-full rounded-lg py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-850 outline-hidden border border-gray-100 dark:border-gray-850"
 								bind:value={valves[property]}
+								on:change={() => {
+									dispatch('change');
+								}}
 							>
 								{#each valvesSpec.properties[property].enum as option}
 									<option value={option} selected={option === valves[property]}>
@@ -66,17 +72,25 @@
 								</div>
 
 								<div class=" pr-2">
-									<Switch bind:state={valves[property]} />
+									<Switch
+										bind:state={valves[property]}
+										on:change={() => {
+											dispatch('change');
+										}}
+									/>
 								</div>
 							</div>
 						{:else}
 							<input
-								class="w-full rounded-lg py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-850 outline-none border border-gray-100 dark:border-gray-800"
+								class="w-full rounded-lg py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-850 outline-hidden border border-gray-100 dark:border-gray-850"
 								type="text"
 								placeholder={valvesSpec.properties[property].title}
 								bind:value={valves[property]}
 								autocomplete="off"
 								required
+								on:change={() => {
+									dispatch('change');
+								}}
 							/>
 						{/if}
 					</div>
@@ -91,5 +105,5 @@
 		</div>
 	{/each}
 {:else}
-	<div class="text-sm">No valves</div>
+	<div class="text-xs">No valves</div>
 {/if}
