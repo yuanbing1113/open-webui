@@ -90,5 +90,9 @@
 		"list": [
 			""
 		]
+	},
+	"rag": {
+		"embedding_engine": "",
+		"embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
 	}
 }
